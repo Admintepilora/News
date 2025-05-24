@@ -1,6 +1,6 @@
 # News Scraper System
 
-A comprehensive news aggregation system that collects articles from multiple sources using different scraping methods, stores them in a MongoDB database, and provides search functionality.
+A streamlined news aggregation system that collects articles from multiple sources and stores them in MongoDB with automatic deduplication and comprehensive search capabilities.
 
 ## Features
 
@@ -16,9 +16,10 @@ A comprehensive news aggregation system that collects articles from multiple sou
 
 - **Robust Architecture**:
   - Proxy rotation for API access
-  - MongoDB storage with deduplication
+  - MongoDB-only storage with automatic deduplication
   - Process monitoring and management
   - Comprehensive logging
+  - Simplified single-database design
 
 - **Command-line Interface**:
   - Process control (start/stop/restart)
@@ -117,6 +118,23 @@ Toggle a topic's active status:
 python topics.py toggle "Some Topic" --disable
 ```
 
+### Database Management
+
+Check database statistics:
+```bash
+python db_utils.py --stats
+```
+
+Count articles and duplicates:
+```bash
+python db_utils.py --count
+```
+
+Fix date formats in database:
+```bash
+python db_utils.py --fix-dates
+```
+
 ## System Components
 
 ### Main Scrapers
@@ -140,9 +158,10 @@ python topics.py toggle "Some Topic" --disable
    - Provides CLI for topic operations
 
 2. **db_utils.py**
-   - MongoDB integration
-   - Article storage and retrieval
-   - Deduplication logic
+   - MongoDB-only integration
+   - Efficient article storage and retrieval
+   - Automatic URL-based deduplication
+   - Database statistics and monitoring
 
 3. **proxy_utils.py**
    - Manages proxy rotation
@@ -167,6 +186,8 @@ python topics.py toggle "Some Topic" --disable
 
 ## Architecture
 
+**Simplified MongoDB-Only Design:**
+
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │ DuckDuckGoAPI   │     │ Google News API │     │ Website RSS     │
@@ -174,7 +195,9 @@ python topics.py toggle "Some Topic" --disable
          │                       │                       │
          ▼                       ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                        MongoDB Database                          │
+│               MongoDB Database (Auto-Deduplication)             │
+│                        1.1M+ Articles                           │
+│                      100% Unique URLs                           │
 └─────────────────────────────────────────────────────────────────┘
          ▲                       ▲                       ▲
          │                       │                       │
@@ -182,6 +205,12 @@ python topics.py toggle "Some Topic" --disable
 │ Search Interface│     │ Topic Management│     │ Process Monitor │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
+
+**Key Benefits:**
+- ✅ **Simplified**: Single database, easier maintenance
+- ✅ **Reliable**: No memory limits, consistent performance  
+- ✅ **Fast**: Native MongoDB deduplication
+- ✅ **Clean**: 0% duplicates, 100% unique URLs
 
 ## Log Files
 

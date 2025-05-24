@@ -2,19 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 Common database utilities for news scrapers
-Supporta sia MongoDB che ClickHouse
+MongoDB-only version (ClickHouse removed)
 """
 import os
 from pymongo import MongoClient, UpdateOne
 from datetime import datetime
 import pandas as pd
-
-# Importa le utilità per ClickHouse
-try:
-    from clickhouse_utils import save_articles_to_clickhouse
-    CLICKHOUSE_AVAILABLE = True
-except ImportError:
-    CLICKHOUSE_AVAILABLE = False
 
 def get_mongo_client(host='localhost', port=27017, username='newsadmin', password='newspassword'):
     """Create and return MongoDB client"""
@@ -91,21 +84,17 @@ def ensure_date_format():
     client.close()
     return result.modified_count
 
-def check_urls_exist(urls_to_check, mongodb=True, clickhouse=True, mongodb_collection='News', 
-                     clickhouse_table='news', logger=None):
+def check_urls_exist(urls_to_check, mongodb_collection='News', logger=None):
     """
-    Controlla se specifici URL esistono già nei database
+    Check if specific URLs already exist in MongoDB
     
-    Parametri:
-    - urls_to_check: lista degli URL da controllare
-    - mongodb: boolean, se True controlla MongoDB
-    - clickhouse: boolean, se True controlla ClickHouse
-    - mongodb_collection: nome collezione MongoDB
-    - clickhouse_table: nome tabella ClickHouse
-    - logger: oggetto logger opzionale
+    Parameters:
+    - urls_to_check: list of URLs to check
+    - mongodb_collection: MongoDB collection name
+    - logger: optional logger object
     
-    Restituisce:
-    - set di URL che esistono già
+    Returns:
+    - set of URLs that already exist
     """
     log = logger.info if logger else print
     log_error = logger.error if logger else print
@@ -115,200 +104,181 @@ def check_urls_exist(urls_to_check, mongodb=True, clickhouse=True, mongodb_colle
     
     existing_urls = set()
     
-    # Controlla URL in MongoDB
-    if mongodb:
-        try:
-            client = get_mongo_client()
-            db = client['News']
-            collection = db[mongodb_collection]
-            
-            # Usa $in per controllare solo gli URL specifici
-            mongo_existing = collection.find(
-                {"url": {"$in": urls_to_check}}, 
-                {"url": 1, "_id": 0}
-            )
-            
-            mongo_urls = set([doc["url"] for doc in mongo_existing if "url" in doc])
-            existing_urls.update(mongo_urls)
-            client.close()
-            
-            log(f"Trovati {len(mongo_urls)} URL esistenti in MongoDB")
-        except Exception as e:
-            log_error(f"Errore nel controllo URL MongoDB: {e}")
+    # Check URLs in MongoDB
+    try:
+        client = get_mongo_client()
+        db = client['News']
+        collection = db[mongodb_collection]
+        
+        # Use $in to check only specific URLs
+        mongo_existing = collection.find(
+            {"url": {"$in": urls_to_check}}, 
+            {"url": 1, "_id": 0}
+        )
+        
+        mongo_urls = set([doc["url"] for doc in mongo_existing if "url" in doc])
+        existing_urls.update(mongo_urls)
+        client.close()
+        
+        log(f"Found {len(mongo_urls)} existing URLs in MongoDB")
+    except Exception as e:
+        log_error(f"Error checking URLs in MongoDB: {e}")
     
-    # Controlla URL in ClickHouse
-    if clickhouse and CLICKHOUSE_AVAILABLE:
-        try:
-            use_ch = os.environ.get('USE_CLICKHOUSE', 'true').lower() == 'true'
-            if use_ch:
-                from clickhouse_utils import get_clickhouse_client
-                client = get_clickhouse_client()
-                database = os.environ.get('CLICKHOUSE_DATABASE', 'news')
-                
-                # Chunk gli URL per evitare query troppo grandi
-                chunk_size = 1000
-                ch_urls = set()
-                
-                for i in range(0, len(urls_to_check), chunk_size):
-                    chunk = urls_to_check[i:i+chunk_size]
-                    # Escape delle quote negli URL
-                    escaped_urls = [url.replace("'", "\\'") for url in chunk]
-                    url_list = "', '".join(escaped_urls)
-                    
-                    existing_chunk = client.execute(
-                        f"SELECT url FROM {database}.{clickhouse_table} WHERE url IN ('{url_list}')"
-                    )
-                    ch_urls.update([url for url, in existing_chunk])
-                
-                existing_urls.update(ch_urls)
-                log(f"Trovati {len(ch_urls)} URL esistenti in ClickHouse")
-        except Exception as e:
-            log_error(f"Errore nel controllo URL ClickHouse: {e}")
-    
-    log(f"Totale: {len(existing_urls)} URL già esistenti sui {len(urls_to_check)} controllati")
+    log(f"Total: {len(existing_urls)} URLs already exist out of {len(urls_to_check)} checked")
     return existing_urls
 
-def get_existing_urls(mongodb=True, clickhouse=True, mongodb_collection='News', 
-                     clickhouse_table='news', max_urls=100000, logger=None):
+# Simplified function for saving articles (MongoDB only)
+def save_articles_to_all_dbs(articles, mongodb_collection='News', logger=None, check_duplicates=True):
     """
-    DEPRECATA: Usa check_urls_exist per controlli più efficienti
-    """
-    log = logger.warning if logger else print
-    log("get_existing_urls è deprecata, usa check_urls_exist per prestazioni migliori")
-    return set()
-
-# Funzione per salvare gli articoli in entrambi i database (MongoDB e ClickHouse)
-def save_articles_to_all_dbs(articles, mongodb_collection='News', clickhouse_table='news', 
-                           use_mongodb=True, use_clickhouse=True, logger=None,
-                           check_across_dbs=True, max_urls=100000):
-    """
-    Salva gli articoli su tutti i database configurati con gestione degli errori
-    e deduplicazione incrociata tra i database
+    Save articles to MongoDB with deduplication
     
-    Parametri:
-    - articles: articoli da salvare (DataFrame o lista di dizionari)
-    - mongodb_collection: nome collezione MongoDB
-    - clickhouse_table: nome tabella ClickHouse
-    - use_mongodb: boolean, se True salva su MongoDB
-    - use_clickhouse: boolean, se True salva su ClickHouse
-    - logger: oggetto logger opzionale
-    - check_across_dbs: boolean, se True controlla URL esistenti in entrambi i DB
-    - max_urls: numero massimo di URL da recuperare (per evitare problemi di memoria)
+    Parameters:
+    - articles: articles to save (DataFrame or list of dicts)
+    - mongodb_collection: MongoDB collection name
+    - logger: optional logger object
+    - check_duplicates: if True, check for existing URLs before saving
     """
     log = logger.info if logger else print
     log_error = logger.error if logger else print
     
-    # Converti in DataFrame se non lo è già
+    # Convert to DataFrame if not already
     if not isinstance(articles, pd.DataFrame):
         try:
             df = pd.DataFrame([article for article in articles])
         except Exception as e:
-            log_error(f"Errore nella conversione degli articoli in DataFrame: {e}")
-            return {'mongodb': 0, 'clickhouse': 0, 'total': 0}
+            log_error(f"Error converting articles to DataFrame: {e}")
+            return {'mongodb': 0, 'total': 0}
     else:
-        df = articles.copy()  # Create a copy to avoid modifying the original
+        df = articles.copy()
     
-    # Inizializza contatori
-    mongo_count = 0
-    clickhouse_count = 0
-    
-    # Se non ci sono articoli, esci
+    # Return if no articles
     if df.empty:
-        log("Nessun articolo da salvare")
-        return {'mongodb': 0, 'clickhouse': 0, 'total': 0}
+        log("No articles to save")
+        return {'mongodb': 0, 'total': 0}
     
-    # Deduplicazione incrociata tra database
-    if check_across_dbs and 'url' in df.columns:
-        # Controlla solo gli URL degli articoli che stiamo per inserire
+    # Check for duplicates if requested
+    if check_duplicates and 'url' in df.columns:
         urls_to_check = df['url'].tolist()
         existing_urls = check_urls_exist(
             urls_to_check=urls_to_check,
-            mongodb=use_mongodb, 
-            clickhouse=use_clickhouse,
             mongodb_collection=mongodb_collection,
-            clickhouse_table=clickhouse_table,
             logger=logger
         )
         
-        # Filtra articoli non esistenti in entrambi i database
+        # Filter out existing articles
         if existing_urls:
             original_count = len(df)
             df = df[~df['url'].isin(existing_urls)]
             skipped = original_count - len(df)
             if skipped > 0:
-                log(f"Saltati {skipped} articoli già esistenti nei database")
+                log(f"Skipped {skipped} articles that already exist")
             
-            # Se non ci sono nuovi articoli, esci
+            # Exit if no new articles
             if df.empty:
-                log("Nessun nuovo articolo da salvare")
-                return {'mongodb': 0, 'clickhouse': 0, 'total': 0}
+                log("No new articles to save")
+                return {'mongodb': 0, 'total': 0}
     
-    # Salva su MongoDB se configurato
-    if use_mongodb:
-        try:
-            # Converti in lista di dizionari per MongoDB
-            mongo_articles = df.to_dict(orient='records') if not df.empty else []
-            if mongo_articles:
-                mongo_count = save_articles_to_db(mongo_articles, collection_name=mongodb_collection, logger=logger)
-                log(f"Salvati {mongo_count} articoli su MongoDB")
-        except Exception as e:
-            log_error(f"Errore nel salvataggio su MongoDB: {e}")
+    # Save to MongoDB
+    mongo_count = 0
+    try:
+        mongo_articles = df.to_dict(orient='records') if not df.empty else []
+        if mongo_articles:
+            mongo_count = save_articles_to_db(mongo_articles, collection_name=mongodb_collection, logger=logger)
+            log(f"Saved {mongo_count} articles to MongoDB")
+    except Exception as e:
+        log_error(f"Error saving to MongoDB: {e}")
     
-    # Salva su ClickHouse se disponibile e configurato
-    if use_clickhouse and CLICKHOUSE_AVAILABLE:
-        try:
-            # Leggi la configurazione dalle variabili d'ambiente
-            use_ch = os.environ.get('USE_CLICKHOUSE', 'true').lower() == 'true'
-            if use_ch and not df.empty:
-                # Non fare deduplicazione in ClickHouse se l'abbiamo già fatta
-                dedup_in_clickhouse = not check_across_dbs
-                clickhouse_count = save_articles_to_clickhouse(
-                    df, 
-                    table_name=clickhouse_table, 
-                    dedup_by_url=dedup_in_clickhouse,
-                    logger=logger
-                )
-                log(f"Salvati {clickhouse_count} articoli su ClickHouse")
-        except Exception as e:
-            log_error(f"Errore nel salvataggio su ClickHouse: {e}")
-    
-    # Restituisci riassunto delle operazioni
+    # Return summary
     return {
         'mongodb': mongo_count,
-        'clickhouse': clickhouse_count,
-        'total': mongo_count + clickhouse_count
+        'total': mongo_count
     }
 
+def get_articles_count(collection_name='News', logger=None):
+    """Get total count of articles in MongoDB collection"""
+    log = logger.info if logger else print
+    log_error = logger.error if logger else print
+    
+    try:
+        client = get_mongo_client()
+        db = client['News']
+        collection = db[collection_name]
+        
+        count = collection.count_documents({})
+        client.close()
+        
+        log(f"MongoDB collection '{collection_name}' contains {count:,} articles")
+        return count
+    except Exception as e:
+        log_error(f"Error counting articles in MongoDB: {e}")
+        return 0
+
+def get_unique_urls_count(collection_name='News', logger=None):
+    """Get count of unique URLs in MongoDB collection"""
+    log = logger.info if logger else print
+    log_error = logger.error if logger else print
+    
+    try:
+        client = get_mongo_client()
+        db = client['News']
+        collection = db[collection_name]
+        
+        # Use aggregation to count unique URLs
+        pipeline = [
+            {"$group": {"_id": "$url"}},
+            {"$count": "unique_urls"}
+        ]
+        
+        result = list(collection.aggregate(pipeline))
+        unique_count = result[0]['unique_urls'] if result else 0
+        client.close()
+        
+        log(f"MongoDB collection '{collection_name}' contains {unique_count:,} unique URLs")
+        return unique_count
+    except Exception as e:
+        log_error(f"Error counting unique URLs in MongoDB: {e}")
+        return 0
+
 if __name__ == "__main__":
-    # Test delle funzionalità
+    # Test functionality
     import argparse
     
-    parser = argparse.ArgumentParser(description='Utilities per database news')
-    parser.add_argument('--fix-dates', action='store_true', help='Correggi il formato delle date in MongoDB')
-    parser.add_argument('--test-clickhouse', action='store_true', help='Testa la connessione a ClickHouse')
-    parser.add_argument('--check-urls', action='store_true', help='Controlla gli URL esistenti in entrambi i DB')
+    parser = argparse.ArgumentParser(description='Database utilities for news')
+    parser.add_argument('--fix-dates', action='store_true', help='Fix date format in MongoDB')
+    parser.add_argument('--count', action='store_true', help='Count articles in MongoDB')
+    parser.add_argument('--stats', action='store_true', help='Show database statistics')
     
     args = parser.parse_args()
     
     if args.fix_dates:
         # Test the date format conversion
         fixed_count = ensure_date_format()
-        print(f"Corretti {fixed_count} campi data nella collezione News di MongoDB")
+        print(f"Fixed {fixed_count} date fields in MongoDB News collection")
     
-    if args.test_clickhouse and CLICKHOUSE_AVAILABLE:
-        from clickhouse_utils import get_clickhouse_client
-        print("Test della connessione a ClickHouse...")
-        try:
-            client = get_clickhouse_client()
-            result = client.execute("SELECT version()")
-            version = result[0][0]
-            print(f"✓ Connessione a ClickHouse riuscita! Versione: {version}")
-        except Exception as e:
-            print(f"! Errore di connessione a ClickHouse: {e}")
+    if args.count:
+        # Count articles
+        count = get_articles_count()
+        unique_count = get_unique_urls_count()
+        print(f"Total articles: {count:,}")
+        print(f"Unique URLs: {unique_count:,}")
+        duplicates = count - unique_count
+        print(f"Duplicates: {duplicates:,} ({duplicates/count*100:.1f}%)" if count > 0 else "Duplicates: 0")
     
-    if args.check_urls:
-        # Test recupero URL
-        print("Controllo URL esistenti...")
-        urls = get_existing_urls(mongodb=True, clickhouse=True)
-        print(f"Trovati {len(urls)} URL univoci esistenti")
-        print(f"Esempi: {list(urls)[:5]}")
+    if args.stats:
+        # Show comprehensive stats
+        print("📊 MongoDB Database Statistics")
+        print("=" * 40)
+        
+        total = get_articles_count()
+        unique = get_unique_urls_count()
+        duplicates = total - unique
+        
+        print(f"Total articles: {total:,}")
+        print(f"Unique URLs: {unique:,}")
+        print(f"Duplicates: {duplicates:,}")
+        
+        if total > 0:
+            print(f"Duplication rate: {duplicates/total*100:.1f}%")
+            print(f"Unique rate: {unique/total*100:.1f}%")
+        
+        print("\n✅ MongoDB-only architecture active")

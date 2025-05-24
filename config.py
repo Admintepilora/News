@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Configurazione per l'accesso ai database
+Configuration for database access
+MongoDB-only version (ClickHouse removed)
 """
 
-# Configurazione MongoDB
+# MongoDB Configuration
 MONGODB_CONFIG = {
     'host': 'localhost',
     'port': 27017,
@@ -12,18 +13,11 @@ MONGODB_CONFIG = {
     'password': 'newspassword'
 }
 
-# Configurazione ClickHouse
-# Carica configurazione da variabili d'ambiente per maggiore sicurezza
-import os
-
-CLICKHOUSE_CONFIG = {
-    'host': os.environ.get('CLICKHOUSE_HOST', 'localhost'),
-    'port': int(os.environ.get('CLICKHOUSE_PORT', '9000')),
-    'user': os.environ.get('CLICKHOUSE_USER', 'default'),
-    'password': os.environ.get('CLICKHOUSE_PASSWORD', ''),
-    'database': os.environ.get('CLICKHOUSE_DATABASE', 'news')
-}
-
-# Configurazione globale
+# Global Configuration
 USE_MONGODB = True
-USE_CLICKHOUSE = True
+
+# Database collection name
+DEFAULT_COLLECTION = 'News'
+
+# Database name
+DEFAULT_DATABASE = 'News'

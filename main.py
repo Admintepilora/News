@@ -23,6 +23,7 @@ from topics import (
 )
 from logger import get_logger, log_start, log_end
 from db_utils import get_mongo_client
+# Sync utilities removed - using MongoDB only
 
 # Get logger
 logger = get_logger("main")
